@@ -1,35 +1,38 @@
-"""Display procedurally drawn flowers on a Waveshare 2.13" e-Paper HAT (V4).
+#!/usr/bin/python
+# -*- coding:utf-8 -*-
+"""Procedurally drawn flower garden on Waveshare 2.13" e-Paper HAT (V4).
 
-Setup on the Pi:
-    sudo apt install python3-pil python3-numpy python3-spidev
-    sudo raspi-config  # enable SPI
-    git clone https://github.com/waveshare/e-Paper
-    # add e-Paper/RaspberryPi_JetsonNano/python/lib to PYTHONPATH, or pip install it
-
-For V3 change the import to `epd2in13_V3`, for V2 `epd2in13_V2`.
+Place this file in the SAME directory as the working Waveshare demo
+(the one that does `sys.path.append(libdir)` to find `waveshare_epd`).
+It reuses that same lib/ path trick.
 """
-
+import os
+import sys
 import math
 import random
 import time
-from PIL import Image, ImageDraw
+import logging
+import traceback
+
+libdir = '/home/ethan/e-Paper/RaspberryPi_JetsonNano/python/lib'
+if os.path.exists(libdir):
+    sys.path.append(libdir)
 
 from waveshare_epd import epd2in13_V4
+from PIL import Image, ImageDraw
 
-WIDTH, HEIGHT = 250, 122  # landscape
+logging.basicConfig(level=logging.INFO)
+
 CYCLE_SECONDS = 60
 PARTIAL_REFRESHES_BEFORE_FULL = 10
 
 
 def draw_petal_flower(draw, cx, cy, radius, petals, petal_len):
     for i in range(petals):
-        angle = (2 * math.pi * i) / petals
-        px = cx + math.cos(angle) * petal_len
-        py = cy + math.sin(angle) * petal_len
-        draw.ellipse(
-            (px - radius, py - radius, px + radius, py + radius),
-            fill=0, outline=0,
-        )
+        a = (2 * math.pi * i) / petals
+        px = cx + math.cos(a) * petal_len
+        py = cy + math.sin(a) * petal_len
+        draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=0, outline=0)
     draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=255, outline=0)
 
 
@@ -61,46 +64,59 @@ def draw_stem_and_leaves(draw, cx, cy_top, cy_bottom):
 FLOWERS = [draw_daisy, draw_tulip, draw_sunflower]
 
 
-def make_scene(seed):
+def make_scene(width, height, seed):
     rng = random.Random(seed)
-    img = Image.new("1", (WIDTH, HEIGHT), 255)
+    img = Image.new('1', (width, height), 255)
     draw = ImageDraw.Draw(img)
-
     count = rng.randint(3, 5)
-    spacing = WIDTH // (count + 1)
+    spacing = width // (count + 1)
     for i in range(count):
         cx = spacing * (i + 1) + rng.randint(-6, 6)
-        ground = HEIGHT - 8
+        ground = height - 8
         flower_y = rng.randint(30, 50)
         draw_stem_and_leaves(draw, cx, flower_y, ground)
         rng.choice(FLOWERS)(draw, cx, flower_y)
-
-    draw.line((0, HEIGHT - 6, WIDTH, HEIGHT - 6), fill=0, width=1)
+    draw.line((0, height - 6, width, height - 6), fill=0, width=1)
     return img
 
 
 def main():
-    epd = epd2in13_V4.EPD()
-    epd.init()
-    epd.Clear(0xFF)
-    epd.init_fast()
-
-    seed = 0
-    partials = 0
     try:
+        logging.info("flowers_epaper: init")
+        epd = epd2in13_V4.EPD()
+        epd.init()
+        epd.Clear(0xFF)
+
+        # landscape: (epd.height, epd.width) matches the working demo
+        w, h = epd.height, epd.width
+
+        first = make_scene(w, h, seed=0)
+        epd.displayPartBaseImage(epd.getbuffer(first))
+
+        seed = 1
+        partials = 0
         while True:
-            img = make_scene(seed)
-            if partials == 0:
+            img = make_scene(w, h, seed)
+            if partials >= PARTIAL_REFRESHES_BEFORE_FULL:
+                logging.info("full refresh")
+                epd.init()
                 epd.display(epd.getbuffer(img))
+                epd.displayPartBaseImage(epd.getbuffer(img))
+                partials = 0
             else:
                 epd.displayPartial(epd.getbuffer(img))
-            partials = (partials + 1) % PARTIAL_REFRESHES_BEFORE_FULL
+                partials += 1
             seed += 1
             time.sleep(CYCLE_SECONDS)
+
     except KeyboardInterrupt:
+        logging.info("ctrl+c: clearing and sleeping display")
         epd.init()
         epd.Clear(0xFF)
         epd.sleep()
+        epd2in13_V4.epdconfig.module_exit(cleanup=True)
+    except Exception:
+        logging.error(traceback.format_exc())
 
 
 if __name__ == "__main__":
