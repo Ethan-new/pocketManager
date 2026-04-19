@@ -29,9 +29,9 @@ EPD_W, EPD_H = 250, 122
 logging.basicConfig(level=logging.INFO)
 
 # ---- CONFIG ----------------------------------------------------------------
-LAT = 40.7128
-LON = -74.0060
-LOCATION_NAME = "New York"
+LAT = 43.6532
+LON = -79.3832
+LOCATION_NAME = "Toronto"
 UNITS = "celsius"      # "fahrenheit" or "celsius"
 WIND_UNITS = "kmh"     # "mph", "kmh", "ms", "kn"
 # Wait for network after boot (systemd can start before wifi associates).
