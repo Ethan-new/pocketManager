@@ -3,8 +3,7 @@
 """Current weather on Waveshare 2.13" e-Paper HAT (V4).
 
 Fetches current conditions from Open-Meteo (no API key required), renders
-once, then puts the panel to sleep. Intended to be run on boot via systemd
-so the display shows the weather whenever you turn the Pi on.
+the display, then puts the panel to sleep. Refreshes once per hour.
 
 Edit LAT, LON, LOCATION_NAME, and UNITS below for your location.
 """
@@ -37,6 +36,8 @@ UNITS = "celsius"      # "fahrenheit" or "celsius"
 WIND_UNITS = "kmh"     # "mph", "kmh", "ms", "kn"
 # Wait for network after boot (systemd can start before wifi associates).
 NETWORK_WAIT_SECONDS = 30
+# Seconds between refreshes.
+REFRESH_INTERVAL_SECONDS = 3600
 # ----------------------------------------------------------------------------
 
 # WMO weather codes → (short label, icon key)
@@ -503,37 +504,41 @@ def main():
         return
 
     from waveshare_epd import epd2in13_V4
-    epd = None
+    epd = epd2in13_V4.EPD()
+    first = True
     try:
-        logging.info("weather_epaper: init")
-        epd = epd2in13_V4.EPD()
-        epd.init()
-        epd.Clear(0xFF)
-        w, h = epd.height, epd.width  # landscape
-
-        if not wait_for_network():
-            logging.warning("network not ready, rendering error frame")
-            epd.display(epd.getbuffer(make_error_frame(w, h, "no network")))
-        else:
+        while True:
             try:
-                data = fetch_weather()
-                epd.display(epd.getbuffer(make_frame(w, h, data)))
-            except Exception as e:
-                logging.error("fetch failed: %s", e)
-                epd.display(epd.getbuffer(make_error_frame(w, h, str(e))))
+                logging.info("weather_epaper: refresh")
+                epd.init()
+                if first:
+                    epd.Clear(0xFF)
+                    first = False
+                w, h = epd.height, epd.width  # landscape
 
-        # One-shot: put the panel to sleep. E-paper holds the image with no power.
-        epd.sleep()
+                if not wait_for_network():
+                    logging.warning("network not ready, rendering error frame")
+                    epd.display(epd.getbuffer(make_error_frame(w, h, "no network")))
+                else:
+                    try:
+                        data = fetch_weather()
+                        epd.display(epd.getbuffer(make_frame(w, h, data)))
+                    except Exception as e:
+                        logging.error("fetch failed: %s", e)
+                        epd.display(epd.getbuffer(make_error_frame(w, h, str(e))))
+
+                # Hold the image with no power until next refresh.
+                epd.sleep()
+            except Exception:
+                logging.error(traceback.format_exc())
+
+            time.sleep(REFRESH_INTERVAL_SECONDS)
 
     except KeyboardInterrupt:
-        if epd is not None:
-            epd.init()
-            epd.Clear(0xFF)
-            epd.sleep()
-            from waveshare_epd import epd2in13_V4 as _epd
-            _epd.epdconfig.module_exit(cleanup=True)
-    except Exception:
-        logging.error(traceback.format_exc())
+        epd.init()
+        epd.Clear(0xFF)
+        epd.sleep()
+        epd2in13_V4.epdconfig.module_exit(cleanup=True)
 
 
 if __name__ == "__main__":
