@@ -1,0 +1,15 @@
+[Unit]
+Description=Pocket Manager weather on e-paper (boot-once)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ethan
+WorkingDirectory=/home/ethan/pocketManager
+ExecStart=/usr/bin/python3 /home/ethan/pocketManager/weather_epaper.py
+# If the Pi boots without wifi, don't spin forever — the script has its own timeout.
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target
