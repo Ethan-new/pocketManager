@@ -93,6 +93,9 @@ def wait_for_network():
         try:
             urllib.request.urlopen("https://api.open-meteo.com", timeout=3)
             return True
+        except urllib.error.HTTPError:
+            # Got an HTTP response (e.g. 404 on root) — network is up.
+            return True
         except Exception:
             time.sleep(2)
     return False
