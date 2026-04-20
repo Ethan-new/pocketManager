@@ -15,7 +15,9 @@ import traceback
 import json
 import urllib.request
 import urllib.parse
-from datetime import datetime
+import socket
+import subprocess
+from datetime import datetime, timedelta
 
 libdir = '/home/ethan/e-Paper/RaspberryPi_JetsonNano/python/lib'
 if os.path.exists(libdir):
@@ -38,6 +40,8 @@ WIND_UNITS = "kmh"     # "mph", "kmh", "ms", "kn"
 NETWORK_WAIT_SECONDS = 30
 # Seconds between refreshes.
 REFRESH_INTERVAL_SECONDS = 3600
+# PiSugar RTC daemon (pisugar-server) TCP socket.
+PISUGAR_ADDR = ("127.0.0.1", 8423)
 # ----------------------------------------------------------------------------
 
 # WMO weather codes → (short label, icon key)
@@ -85,6 +89,27 @@ def fetch_weather():
     logging.info("fetching %s", url)
     with urllib.request.urlopen(url, timeout=10) as resp:
         return json.loads(resp.read().decode())
+
+
+def _pisugar_send(cmd, timeout=3):
+    with socket.create_connection(PISUGAR_ADDR, timeout=timeout) as s:
+        s.sendall((cmd + "\n").encode())
+        return s.recv(1024).decode(errors="replace")
+
+
+def schedule_pisugar_wake(seconds_from_now):
+    """Set the PiSugar RTC alarm `seconds_from_now` from now. Returns True on success."""
+    wake = datetime.now().astimezone() + timedelta(seconds=seconds_from_now)
+    iso = wake.strftime("%Y-%m-%dT%H:%M:%S%z")
+    iso = iso[:-2] + ":" + iso[-2:]  # +0000 -> +00:00
+    try:
+        _pisugar_send("rtc_pi2rtc")
+        resp = _pisugar_send(f"rtc_alarm_set {iso} 127")
+        logging.info("pisugar rtc_alarm_set -> %s", resp.strip())
+        return True
+    except Exception as e:
+        logging.error("pisugar wake schedule failed: %s", e)
+        return False
 
 
 def wifi_status():
@@ -562,37 +587,53 @@ def main():
         logging.info("wrote preview.png (%dx%d, %d scenarios)", grid_w, grid_h, len(scenarios))
         return
 
+    shutdown_after = "--no-shutdown" not in sys.argv
+
     from waveshare_epd import epd2in13_V4
     epd = epd2in13_V4.EPD()
-    first = True
+    try:
+        logging.info("weather_epaper: refresh")
+        epd.init()
+        epd.Clear(0xFF)
+        w, h = epd.height, epd.width  # landscape
+
+        if not wait_for_network():
+            logging.warning("network not ready, rendering error frame")
+            epd.display(epd.getbuffer(make_error_frame(w, h, "no network")))
+        else:
+            try:
+                data = fetch_weather()
+                epd.display(epd.getbuffer(make_frame(w, h, data, wifi=wifi_status())))
+            except Exception as e:
+                logging.error("fetch failed: %s", e)
+                epd.display(epd.getbuffer(make_error_frame(w, h, str(e))))
+
+        # Hold the image with no power.
+        epd.sleep()
+    except Exception:
+        logging.error(traceback.format_exc())
+
+    if shutdown_after:
+        if schedule_pisugar_wake(REFRESH_INTERVAL_SECONDS):
+            logging.info("shutting down; PiSugar will wake in %ds", REFRESH_INTERVAL_SECONDS)
+            subprocess.run(["sudo", "shutdown", "-h", "now"], check=False)
+            return
+        logging.warning("deep sleep unavailable; falling back to in-process sleep loop")
+
+    # Fallback: keep the process alive and refresh on interval.
     try:
         while True:
+            time.sleep(REFRESH_INTERVAL_SECONDS)
             try:
-                logging.info("weather_epaper: refresh")
                 epd.init()
-                if first:
-                    epd.Clear(0xFF)
-                    first = False
-                w, h = epd.height, epd.width  # landscape
-
                 if not wait_for_network():
-                    logging.warning("network not ready, rendering error frame")
                     epd.display(epd.getbuffer(make_error_frame(w, h, "no network")))
                 else:
-                    try:
-                        data = fetch_weather()
-                        epd.display(epd.getbuffer(make_frame(w, h, data, wifi=wifi_status())))
-                    except Exception as e:
-                        logging.error("fetch failed: %s", e)
-                        epd.display(epd.getbuffer(make_error_frame(w, h, str(e))))
-
-                # Hold the image with no power until next refresh.
+                    data = fetch_weather()
+                    epd.display(epd.getbuffer(make_frame(w, h, data, wifi=wifi_status())))
                 epd.sleep()
             except Exception:
                 logging.error(traceback.format_exc())
-
-            time.sleep(REFRESH_INTERVAL_SECONDS)
-
     except KeyboardInterrupt:
         epd.init()
         epd.Clear(0xFF)
