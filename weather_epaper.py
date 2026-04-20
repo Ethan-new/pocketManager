@@ -38,8 +38,8 @@ UNITS = "celsius"      # "fahrenheit" or "celsius"
 WIND_UNITS = "kmh"     # "mph", "kmh", "ms", "kn"
 # Wait for network after boot (systemd can start before wifi associates).
 NETWORK_WAIT_SECONDS = 30
-# Seconds between refreshes.
-REFRESH_INTERVAL_SECONDS = 180
+# Wake at these minutes-past-the-hour (local time). e.g. (29, 59) → :29 and :59.
+REFRESH_MINUTE_MARKS = (29, 59)
 # PiSugar RTC daemon (pisugar-server) TCP socket.
 PISUGAR_ADDR = ("127.0.0.1", 8423)
 # ----------------------------------------------------------------------------
@@ -97,9 +97,33 @@ def _pisugar_send(cmd, timeout=3):
         return s.recv(1024).decode(errors="replace")
 
 
-def schedule_pisugar_wake(seconds_from_now):
-    """Set the PiSugar RTC alarm `seconds_from_now` from now. Returns True on success."""
-    wake = datetime.now().astimezone() + timedelta(seconds=seconds_from_now)
+def active_sessions():
+    """Return a list of active login sessions (SSH, console, etc.).
+    Used to skip the power-off cycle while someone is working on the Pi."""
+    try:
+        out = subprocess.run(
+            ["who"], capture_output=True, text=True, timeout=3,
+        ).stdout.strip()
+        return [line for line in out.splitlines() if line.strip()]
+    except Exception as e:
+        logging.warning("who lookup failed: %s", e)
+        return []
+
+
+def next_refresh_time(now=None):
+    """Next local datetime whose minute is in REFRESH_MINUTE_MARKS."""
+    now = (now or datetime.now().astimezone()).replace(microsecond=0)
+    candidates = []
+    for base in (now, now + timedelta(hours=1)):
+        for m in REFRESH_MINUTE_MARKS:
+            c = base.replace(minute=m, second=0)
+            if c > now:
+                candidates.append(c)
+    return min(candidates)
+
+
+def schedule_pisugar_wake(wake):
+    """Arm the PiSugar RTC alarm for the given local datetime. Returns True on success."""
     iso = wake.strftime("%Y-%m-%dT%H:%M:%S%z")
     iso = iso[:-2] + ":" + iso[-2:]  # +0000 -> +00:00
     try:
@@ -621,9 +645,18 @@ def main():
     except Exception:
         logging.error(traceback.format_exc())
 
+    sessions = active_sessions()
+    if shutdown_after and sessions:
+        logging.warning(
+            "skipping shutdown; %d active login session(s): %s",
+            len(sessions), sessions,
+        )
+        shutdown_after = False
+
     if shutdown_after:
-        if schedule_pisugar_wake(REFRESH_INTERVAL_SECONDS):
-            logging.info("shutting down; PiSugar will wake in %ds", REFRESH_INTERVAL_SECONDS)
+        wake = next_refresh_time()
+        if schedule_pisugar_wake(wake):
+            logging.info("shutting down; PiSugar will wake at %s", wake.isoformat())
             result = subprocess.run(
                 ["sudo", "-n", "shutdown", "-h", "now"],
                 capture_output=True, text=True,
@@ -638,10 +671,13 @@ def main():
         else:
             logging.warning("deep sleep unavailable; falling back to in-process sleep loop")
 
-    # Fallback: keep the process alive and refresh on interval.
+    # Fallback: keep the process alive and refresh at each scheduled mark.
     try:
         while True:
-            time.sleep(REFRESH_INTERVAL_SECONDS)
+            wake = next_refresh_time()
+            sleep_s = max(1, (wake - datetime.now().astimezone()).total_seconds())
+            logging.info("fallback: sleeping %.0fs until %s", sleep_s, wake.isoformat())
+            time.sleep(sleep_s)
             try:
                 epd.init()
                 if not wait_for_network():
