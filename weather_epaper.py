@@ -103,9 +103,17 @@ def schedule_pisugar_wake(seconds_from_now):
     iso = wake.strftime("%Y-%m-%dT%H:%M:%S%z")
     iso = iso[:-2] + ":" + iso[-2:]  # +0000 -> +00:00
     try:
-        _pisugar_send("rtc_pi2rtc")
-        resp = _pisugar_send(f"rtc_alarm_set {iso} 127")
-        logging.info("pisugar rtc_alarm_set -> %s", resp.strip())
+        sync_resp = _pisugar_send("rtc_pi2rtc").strip()
+        logging.info("pisugar rtc_pi2rtc -> %s", sync_resp)
+        resp = _pisugar_send(f"rtc_alarm_set {iso} 127").strip()
+        logging.info("pisugar rtc_alarm_set -> %s", resp)
+        # pisugar-server replies with the echoed command on success and a line
+        # containing "error"/"fail" on failure. Treat anything that looks like
+        # an error as a failure so we don't shut down into the dark.
+        lowered = resp.lower()
+        if "error" in lowered or "fail" in lowered or "invalid" in lowered:
+            logging.error("pisugar rejected alarm: %s", resp)
+            return False
         return True
     except Exception as e:
         logging.error("pisugar wake schedule failed: %s", e)
@@ -616,9 +624,19 @@ def main():
     if shutdown_after:
         if schedule_pisugar_wake(REFRESH_INTERVAL_SECONDS):
             logging.info("shutting down; PiSugar will wake in %ds", REFRESH_INTERVAL_SECONDS)
-            subprocess.run(["sudo", "shutdown", "-h", "now"], check=False)
-            return
-        logging.warning("deep sleep unavailable; falling back to in-process sleep loop")
+            result = subprocess.run(
+                ["sudo", "-n", "shutdown", "-h", "now"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                return
+            logging.error(
+                "shutdown failed (rc=%s): stdout=%r stderr=%r; "
+                "falling back to in-process sleep loop",
+                result.returncode, result.stdout.strip(), result.stderr.strip(),
+            )
+        else:
+            logging.warning("deep sleep unavailable; falling back to in-process sleep loop")
 
     # Fallback: keep the process alive and refresh on interval.
     try:
