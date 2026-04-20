@@ -6,8 +6,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=ethan
-WorkingDirectory=/home/ethan/pocketManager
-ExecStart=/usr/bin/python3 /home/ethan/pocketManager/weather_epaper.py
+WorkingDirectory=/home/ethan/Desktop/pocketManager
+ExecStart=/usr/bin/python3 /home/ethan/Desktop/pocketManager/weather_epaper.py
 # If the Pi boots without wifi, don't spin forever — the script has its own timeout.
 TimeoutStartSec=90
 
