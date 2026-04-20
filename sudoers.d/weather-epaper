@@ -1,1 +1,1 @@
-ethan ALL=(root) NOPASSWD: /sbin/shutdown
+ethan ALL=(root) NOPASSWD: /usr/sbin/shutdown
