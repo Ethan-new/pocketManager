@@ -87,6 +87,59 @@ def fetch_weather():
         return json.loads(resp.read().decode())
 
 
+def wifi_status():
+    """Return (connected, bars) where bars is 0..4. Uses /proc/net/wireless
+    on Linux; falls back to a socket reachability probe elsewhere."""
+    try:
+        with open("/proc/net/wireless") as f:
+            lines = f.readlines()
+        for line in lines[2:]:
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            try:
+                quality = float(parts[2].rstrip("."))
+            except ValueError:
+                continue
+            if quality >= 55:
+                bars = 4
+            elif quality >= 40:
+                bars = 3
+            elif quality >= 25:
+                bars = 2
+            elif quality > 0:
+                bars = 1
+            else:
+                bars = 0
+            return (True, bars)
+    except Exception:
+        pass
+    try:
+        import socket
+        s = socket.create_connection(("8.8.8.8", 53), timeout=1)
+        s.close()
+        return (True, 3)
+    except Exception:
+        return (False, 0)
+
+
+def draw_wifi_icon(draw, x, y, connected, bars):
+    """Draw a small 4-bar wifi icon with top-left at (x, y). ~12x9 px."""
+    if not connected:
+        draw.rectangle((x, y + 1, x + 11, y + 9), outline=0)
+        draw.line((x + 1, y + 2, x + 10, y + 8), fill=0)
+        draw.line((x + 1, y + 8, x + 10, y + 2), fill=0)
+        return
+    heights = (3, 5, 7, 9)
+    for i, h in enumerate(heights):
+        bx = x + i * 3
+        top = y + (9 - h)
+        if i < bars:
+            draw.rectangle((bx, top, bx + 2, y + 9), fill=0)
+        else:
+            draw.rectangle((bx, top, bx + 2, y + 9), outline=0)
+
+
 def wait_for_network():
     deadline = time.time() + NETWORK_WAIT_SECONDS
     while time.time() < deadline:
@@ -350,9 +403,10 @@ def draw_jacket(draw, cx, cy, r, kind):
             draw.line((x0, y0, x1, y1), fill=0, width=1)
 
 
-def make_frame(width, height, data):
+def make_frame(width, height, data, wifi=(True, 4)):
     img = Image.new('1', (width, height), 255)
     draw = ImageDraw.Draw(img)
+    wifi_connected, wifi_bars = wifi
 
     cur = data.get("current", {})
     code = cur.get("weather_code", 0)
@@ -373,7 +427,9 @@ def make_frame(width, height, data):
     now = datetime.now().strftime("%a %b %d  %H:%M")
     draw.text((4, 1), LOCATION_NAME, fill=0, font=font_sm)
     tw = draw.textlength(now, font=font_sm)
-    draw.text((width - tw - 4, 1), now, fill=0, font=font_sm)
+    time_x = width - tw - 4
+    draw.text((time_x, 1), now, fill=0, font=font_sm)
+    draw_wifi_icon(draw, time_x - 16, 2, wifi_connected, wifi_bars)
     draw.line((0, header_h, width, header_h), fill=0, width=1)
 
     # Vertical split: left = temp + condition, right = jacket recommendation.
@@ -525,7 +581,7 @@ def main():
                 else:
                     try:
                         data = fetch_weather()
-                        epd.display(epd.getbuffer(make_frame(w, h, data)))
+                        epd.display(epd.getbuffer(make_frame(w, h, data, wifi=wifi_status())))
                     except Exception as e:
                         logging.error("fetch failed: %s", e)
                         epd.display(epd.getbuffer(make_error_frame(w, h, str(e))))
