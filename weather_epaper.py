@@ -97,6 +97,27 @@ def _pisugar_send(cmd, timeout=3):
         return s.recv(1024).decode(errors="replace")
 
 
+def pisugar_battery():
+    """Return battery percent (0-100) as int, or None if unavailable.
+
+    pisugar-server replies to `get battery` with a line like `battery: 85.5`.
+    """
+    try:
+        resp = _pisugar_send("get battery")
+    except Exception as e:
+        logging.warning("pisugar battery fetch failed: %s", e)
+        return None
+    for line in resp.splitlines():
+        if "battery" not in line.lower():
+            continue
+        for token in reversed(line.replace(":", " ").split()):
+            try:
+                return max(0, min(100, int(round(float(token)))))
+            except ValueError:
+                continue
+    return None
+
+
 def active_sessions():
     """Return a list of active remote (SSH) login sessions.
     Local console auto-login (tty1, seat0) is ignored so the Pi can still
@@ -188,6 +209,32 @@ def wifi_status():
         return (True, 3)
     except Exception:
         return (False, 0)
+
+
+def draw_battery_icon(draw, x, y, percent):
+    """Draw a battery icon with the percentage number centered inside.
+
+    Top-left anchor at (x, y). Total footprint ~26x12 px (24 body + 2 nub).
+    `percent` may be None → renders as "??".
+    """
+    body_w, body_h = 24, 12
+    nub_w, nub_h = 2, 6
+    # Body outline.
+    draw.rectangle((x, y, x + body_w, y + body_h), outline=0, width=1)
+    # Nub on the right, vertically centered.
+    nub_y = y + (body_h - nub_h) // 2
+    draw.rectangle(
+        (x + body_w + 1, nub_y, x + body_w + nub_w, nub_y + nub_h),
+        fill=0,
+    )
+    text = "??" if percent is None else f"{int(percent)}"
+    font = _load_font(9)
+    tbox = draw.textbbox((0, 0), text, font=font)
+    tw = tbox[2] - tbox[0]
+    th = tbox[3] - tbox[1]
+    tx = x + (body_w - tw) // 2 - tbox[0]
+    ty = y + (body_h - th) // 2 - tbox[1]
+    draw.text((tx, ty), text, fill=0, font=font)
 
 
 def draw_wifi_icon(draw, x, y, connected, bars):
@@ -470,7 +517,7 @@ def draw_jacket(draw, cx, cy, r, kind):
             draw.line((x0, y0, x1, y1), fill=0, width=1)
 
 
-def make_frame(width, height, data, wifi=(True, 4)):
+def make_frame(width, height, data, wifi=(True, 4), battery=None):
     img = Image.new('1', (width, height), 255)
     draw = ImageDraw.Draw(img)
     wifi_connected, wifi_bars = wifi
@@ -496,7 +543,11 @@ def make_frame(width, height, data, wifi=(True, 4)):
     tw = draw.textlength(now, font=font_sm)
     time_x = width - tw - 4
     draw.text((time_x, 1), now, fill=0, font=font_sm)
-    draw_wifi_icon(draw, time_x - 16, 2, wifi_connected, wifi_bars)
+    wifi_x = time_x - 16
+    draw_wifi_icon(draw, wifi_x, 2, wifi_connected, wifi_bars)
+    # Battery icon sits left of the wifi indicator (26 px footprint + 4 px gap).
+    battery_x = wifi_x - 30
+    draw_battery_icon(draw, battery_x, 1, battery)
     draw.line((0, header_h, width, header_h), fill=0, width=1)
 
     # Vertical split: left = temp + condition, right = jacket recommendation.
@@ -617,11 +668,17 @@ def main():
         except Exception:
             label_font = ImageFont.load_default()
         gdraw = ImageDraw.Draw(grid)
+        # Cycle a few battery levels across preview cells to show the icon's
+        # 1-, 2-, and 3-digit rendering (incl. the empty case).
+        mock_batteries = [87, 62, 34, 8, 100, None, 55, 21]
         for i, (name, cur) in enumerate(scenarios):
             r, c = divmod(i, cols)
             x = gap + c * (cell_w + gap)
             y = gap + r * (cell_h + gap)
-            img = make_frame(EPD_W, EPD_H, {"current": cur})
+            img = make_frame(
+                EPD_W, EPD_H, {"current": cur},
+                battery=mock_batteries[i % len(mock_batteries)],
+            )
             big = img.convert("L").resize((cell_w, EPD_H * scale), Image.NEAREST)
             grid.paste(big, (x, y))
             gdraw.text((x + 4, y + EPD_H * scale + 2), name, fill=0, font=label_font)
@@ -645,7 +702,11 @@ def main():
         else:
             try:
                 data = fetch_weather()
-                epd.display(epd.getbuffer(make_frame(w, h, data, wifi=wifi_status())))
+                epd.display(epd.getbuffer(make_frame(
+                    w, h, data,
+                    wifi=wifi_status(),
+                    battery=pisugar_battery(),
+                )))
             except Exception as e:
                 logging.error("fetch failed: %s", e)
                 epd.display(epd.getbuffer(make_error_frame(w, h, str(e))))
@@ -694,7 +755,11 @@ def main():
                     epd.display(epd.getbuffer(make_error_frame(w, h, "no network")))
                 else:
                     data = fetch_weather()
-                    epd.display(epd.getbuffer(make_frame(w, h, data, wifi=wifi_status())))
+                    epd.display(epd.getbuffer(make_frame(
+                        w, h, data,
+                        wifi=wifi_status(),
+                        battery=pisugar_battery(),
+                    )))
                 epd.sleep()
             except Exception:
                 logging.error(traceback.format_exc())
