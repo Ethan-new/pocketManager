@@ -98,16 +98,26 @@ def _pisugar_send(cmd, timeout=3):
 
 
 def active_sessions():
-    """Return a list of active login sessions (SSH, console, etc.).
-    Used to skip the power-off cycle while someone is working on the Pi."""
+    """Return a list of active remote (SSH) login sessions.
+    Local console auto-login (tty1, seat0) is ignored so the Pi can still
+    power-cycle on schedule when no one is actually connected."""
     try:
         out = subprocess.run(
             ["who"], capture_output=True, text=True, timeout=3,
         ).stdout.strip()
-        return [line for line in out.splitlines() if line.strip()]
     except Exception as e:
         logging.warning("who lookup failed: %s", e)
         return []
+    remote = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        tty = parts[1]
+        # pts/N = pseudo-terminal (SSH / remote). tty*/seat* = local console.
+        if tty.startswith("pts/"):
+            remote.append(line)
+    return remote
 
 
 def next_refresh_time(now=None):
