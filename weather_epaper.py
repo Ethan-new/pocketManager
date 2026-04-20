@@ -39,7 +39,7 @@ WIND_UNITS = "kmh"     # "mph", "kmh", "ms", "kn"
 # Wait for network after boot (systemd can start before wifi associates).
 NETWORK_WAIT_SECONDS = 30
 # Seconds between refreshes.
-REFRESH_INTERVAL_SECONDS = 3600
+REFRESH_INTERVAL_SECONDS = 180
 # PiSugar RTC daemon (pisugar-server) TCP socket.
 PISUGAR_ADDR = ("127.0.0.1", 8423)
 # ----------------------------------------------------------------------------
