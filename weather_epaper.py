@@ -639,6 +639,22 @@ def make_error_frame(width, height, message):
     return img
 
 
+def is_missing_display_error(text):
+    """Best-effort detection for unplugged/missing e-paper hardware."""
+    msg = text.lower()
+    hints = (
+        "/dev/spidev",
+        "spidev",
+        "gpiochip",
+        "remote i/o error",
+        "no such file or directory",
+        "failed to add edge detection",
+        "failed to initialize",
+        "spi",
+    )
+    return any(hint in msg for hint in hints)
+
+
 def main():
     # Preview mode: render a grid of scenarios to preview.png and exit.
     if "--preview" in sys.argv:
@@ -690,6 +706,7 @@ def main():
 
     from waveshare_epd import epd2in13_V4
     epd = epd2in13_V4.EPD()
+    w, h = EPD_W, EPD_H
     try:
         logging.info("weather_epaper: refresh")
         epd.init()
@@ -714,7 +731,13 @@ def main():
         # Hold the image with no power.
         epd.sleep()
     except Exception:
-        logging.error(traceback.format_exc())
+        err = traceback.format_exc()
+        logging.error(err)
+        if shutdown_after and is_missing_display_error(err):
+            logging.warning(
+                "display not detected; skipping auto shutdown and staying online"
+            )
+            shutdown_after = False
 
     sessions = active_sessions()
     if shutdown_after and sessions:
